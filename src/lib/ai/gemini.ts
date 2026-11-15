@@ -7,7 +7,18 @@ import { RosterExtraction, ScheduleExtraction } from "./schemas";
 import { ROSTER_PROMPT, SCHEDULE_PROMPT, SYSTEM_PROMPT } from "./prompts";
 import { normalizeRoster, normalizeSchedule } from "./normalize";
 
-const DEFAULT_MODEL = "gemini-2.5-flash";
+// Google limited the 2.5 models to existing users; new keys get 404 on them.
+// Current docs use gemini-3.8-flash. If a model is ever unavailable (404), the
+// provider discovers the best Flash model this key can use and retries once.
+export const DEFAULT_MODEL = "gemini-3.8-flash";
+
+/** Model found through discovery, reused by later requests on this server instance. */
+let discoveredModel: string | null = null;
+
+/** Test helper: forget any discovered model. */
+export function resetGeminiDiscovery() {
+  discoveredModel = null;
+}
 
 // Gemini accepts inline files up to ~20 MB per request; base64 adds ~33 %.
 const MAX_INLINE_BYTES = 14 * 1024 * 1024;
@@ -69,10 +80,38 @@ export function geminiError(err: unknown, model: string): ExtractionError {
 }
 
 /** Minimal surface we use, so tests can inject a fake client. */
-export type GeminiModels = Pick<GoogleGenAI["models"], "generateContent">;
+export type GeminiModels = Pick<GoogleGenAI["models"], "generateContent" | "list">;
+
+type ModelInfo = { name?: string; supportedActions?: string[] };
 
 /**
- * Google Gemini Vision extraction (default model: gemini-2.5-flash).
+ * Choose the best general-purpose Flash model from a model list: it must support
+ * generateContent, and stable, highest-version models win. Specialised or
+ * experimental variants (lite, image, audio/tts, live, embedding, exp) are skipped;
+ * previews are used only when nothing stable exists.
+ */
+export function pickFlashModel(models: ModelInfo[]): string | null {
+  const SKIP = /lite|image|tts|audio|live|embed|exp|thinking|8b|robotics|computer/i;
+  const cands = models
+    .map((m) => ({ id: (m.name ?? "").replace(/^models\//, ""), actions: m.supportedActions }))
+    .filter((m) => m.id && /flash/i.test(m.id) && !SKIP.test(m.id))
+    .filter((m) => !m.actions || m.actions.includes("generateContent"));
+  if (!cands.length) return null;
+  const version = (id: string) => Number(id.match(/gemini-(\d+(?:\.\d+)?)/)?.[1] ?? 0);
+  const isPreview = (id: string) => /preview/i.test(id);
+  const isAlias = (id: string) => /latest/i.test(id);
+  const rank = (id: string) => [isPreview(id) ? 0 : 1, version(id), isAlias(id) ? 0 : 1, -id.length];
+  cands.sort((a, b) => {
+    const ra = rank(a.id), rb = rank(b.id);
+    for (let i = 0; i < ra.length; i++) if (ra[i] !== rb[i]) return rb[i] - ra[i];
+    return 0;
+  });
+  return cands[0].id;
+}
+
+/**
+ * Google Gemini Vision extraction (default model: gemini-3.8-flash, with automatic
+ * fallback to an available Flash model if the configured one returns 404).
  * The image/PDF is sent inline with a strict JSON schema; the reply is parsed,
  * validated against the same Zod schema, then cleaned (Arabic name
  * normalisation, de-duplication, time/period checks) before the teacher reviews it.
@@ -87,18 +126,26 @@ export class GeminiProvider implements ExtractionProvider {
     this.model = model || DEFAULT_MODEL;
   }
 
+  /** Ask Google which models this key can use and pick the best Flash model. */
+  private async discover(): Promise<string | null> {
+    const found: ModelInfo[] = [];
+    const pager = await this.models.list({ config: { pageSize: 100 } });
+    for await (const m of pager) {
+      found.push({ name: m.name, supportedActions: m.supportedActions });
+      if (found.length >= 300) break;
+    }
+    return pickFlashModel(found);
+  }
+
   async extract({ kind, data, mime }: ExtractionInput): Promise<ExtractionOutput> {
     if (data.length > MAX_INLINE_BYTES) {
       throw new ExtractionError("الملف كبير جدًا للتحليل. صوّر الصفحة بدل رفع PDF كبير، أو قسّم الملف.");
     }
     const spec = SCHEMAS[kind];
 
-    let text: string | undefined;
-    let finish: string | undefined;
-    let blocked: string | undefined;
-    try {
-      const res = await this.models.generateContent({
-        model: this.model,
+    const request = (model: string) =>
+      this.models.generateContent({
+        model,
         contents: [
           {
             role: "user",
@@ -113,12 +160,28 @@ export class GeminiProvider implements ExtractionProvider {
           maxOutputTokens: 32_000,
         },
       });
-      text = res.text;
-      finish = res.candidates?.[0]?.finishReason;
-      blocked = res.promptFeedback?.blockReason;
+
+    let model = discoveredModel ?? this.model;
+    let res: Awaited<ReturnType<typeof request>>;
+    try {
+      res = await request(model);
     } catch (err) {
-      throw geminiError(err, this.model);
+      // Model retired or not available to this key: find one that is, retry once.
+      if (!(err instanceof ApiError && err.status === 404)) throw geminiError(err, model);
+      const fallback = await this.discover().catch(() => null);
+      if (!fallback || fallback === model) throw geminiError(err, model);
+      console.warn("gemini: model unavailable, using discovered model", { requested: model, using: fallback });
+      model = fallback;
+      try {
+        res = await request(model);
+        discoveredModel = model;
+      } catch (err2) {
+        throw geminiError(err2, model);
+      }
     }
+    const text = res.text;
+    const finish = res.candidates?.[0]?.finishReason;
+    const blocked = res.promptFeedback?.blockReason;
 
     if (blocked || finish === "SAFETY" || finish === "PROHIBITED_CONTENT" || finish === "BLOCKLIST") {
       throw new ExtractionError("رفضت الخدمة معالجة هذا الملف. تأكد أنه كشف أسماء أو جدول دراسي.");
@@ -141,7 +204,7 @@ export class GeminiProvider implements ExtractionProvider {
 
     return {
       provider: "gemini",
-      model: this.model,
+      model,
       result:
         kind === "roster"
           ? { kind, data: normalizeRoster(parsed.data as RosterExtraction) }

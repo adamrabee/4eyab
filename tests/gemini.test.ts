@@ -1,26 +1,39 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { ApiError } from "@google/genai";
-import { GeminiProvider, type GeminiModels } from "@/lib/ai/gemini";
+import { GeminiProvider, pickFlashModel, resetGeminiDiscovery, type GeminiModels } from "@/lib/ai/gemini";
 import { ExtractionError } from "@/lib/ai/provider";
 
 type Call = Parameters<GeminiModels["generateContent"]>[0];
 
-/** Fake Gemini client: records the request and returns a canned response. */
-function fake(reply: { text?: string; finishReason?: string; blockReason?: string } | Error) {
+type Reply = { text?: string; finishReason?: string; blockReason?: string } | Error;
+
+/** Fake Gemini client: records requests and returns canned replies (one per call; the last one repeats). */
+function fake(reply: Reply | Reply[], available: { name: string; supportedActions?: string[] }[] = []) {
   const calls: Call[] = [];
+  const replies = Array.isArray(reply) ? reply : [reply];
+  let listed = 0;
   const models = {
     generateContent: async (req: Call) => {
       calls.push(req);
-      if (reply instanceof Error) throw reply;
+      const r = replies[Math.min(calls.length - 1, replies.length - 1)];
+      if (r instanceof Error) throw r;
       return {
-        text: reply.text,
-        candidates: [{ finishReason: reply.finishReason ?? "STOP" }],
-        promptFeedback: reply.blockReason ? { blockReason: reply.blockReason } : undefined,
+        text: r.text,
+        candidates: [{ finishReason: r.finishReason ?? "STOP" }],
+        promptFeedback: r.blockReason ? { blockReason: r.blockReason } : undefined,
       };
     },
+    list: async () => {
+      listed++;
+      return (async function* () {
+        yield* available;
+      })();
+    },
   } as unknown as GeminiModels;
-  return { models, calls };
+  return { models, calls, listCount: () => listed };
 }
+
+beforeEach(() => resetGeminiDiscovery());
 
 const img = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]);
 
@@ -44,7 +57,7 @@ describe("GeminiProvider", () => {
     // request shape
     expect(calls).toHaveLength(1);
     const req = calls[0];
-    expect(req.model).toBe("gemini-2.5-flash");
+    expect(req.model).toBe("gemini-3.8-flash");
     const parts = (req.contents as { parts: { inlineData?: { mimeType: string; data: string }; text?: string }[] }[])[0].parts;
     expect(parts[0].inlineData).toEqual({ mimeType: "image/jpeg", data: img.toString("base64") });
     expect(parts[1].text).toMatch(/كشف أسماء/);
@@ -121,10 +134,62 @@ describe("GeminiProvider", () => {
     });
   }
 
+  it("falls back to an available Flash model when the configured one is gone (404), and remembers it", async () => {
+    const ok = { text: JSON.stringify({ is_roster: true, classroom: { name: "", grade: "", section: "" }, students: [{ full_name: "خالد", student_number: "", confidence: "high" }], notes: "" }) };
+    const gone = new ApiError({ message: "models/gemini-3.8-flash is not found for API version v1beta", status: 404 });
+    const { models, calls, listCount } = fake([gone, ok], [
+      { name: "models/gemini-3.9-flash-lite", supportedActions: ["generateContent"] },
+      { name: "models/gemini-3.9-flash", supportedActions: ["generateContent", "countTokens"] },
+      { name: "models/text-embedding-005", supportedActions: ["embedContent"] },
+    ]);
+    const p = new GeminiProvider("k", undefined, models);
+    const out = await p.extract({ kind: "roster", data: img, mime: "image/jpeg" });
+    expect(calls.map((c) => c.model)).toEqual(["gemini-3.8-flash", "gemini-3.9-flash"]);
+    expect(out.model).toBe("gemini-3.9-flash");
+    // next request goes straight to the discovered model, no second lookup
+    await p.extract({ kind: "roster", data: img, mime: "image/jpeg" });
+    expect(calls.at(-1)?.model).toBe("gemini-3.9-flash");
+    expect(listCount()).toBe(1);
+  });
+
+  it("keeps the clear 404 message when no alternative model exists", async () => {
+    const gone = new ApiError({ message: "not found", status: 404 });
+    const { models } = fake(gone, [{ name: "models/text-embedding-005", supportedActions: ["embedContent"] }]);
+    await expect(new GeminiProvider("k", undefined, models).extract({ kind: "roster", data: img, mime: "image/jpeg" })).rejects.toThrow(/غير متاح.*404/);
+  });
+
   it("refuses files too large to send inline", async () => {
     const { models, calls } = fake({ text: "{}" });
     const big = Buffer.alloc(15 * 1024 * 1024);
     await expect(new GeminiProvider("k", undefined, models).extract({ kind: "roster", data: big, mime: "application/pdf" })).rejects.toThrow(/كبير جدًا/);
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe("pickFlashModel", () => {
+  const m = (name: string, actions = ["generateContent"]) => ({ name: `models/${name}`, supportedActions: actions });
+  it("prefers the newest stable general Flash model", () => {
+    expect(
+      pickFlashModel([
+        m("gemini-2.5-flash"),
+        m("gemini-3.8-flash-lite"),
+        m("gemini-3.8-flash"),
+        m("gemini-3.8-flash-image"),
+        m("gemini-3.9-flash-preview-10-2026"),
+        m("gemini-flash-latest"),
+        m("gemini-3.8-pro"),
+        m("text-embedding-005", ["embedContent"]),
+      ]),
+    ).toBe("gemini-3.8-flash");
+  });
+  it("uses a preview only when nothing stable exists", () => {
+    expect(pickFlashModel([m("gemini-4-flash-preview-01"), m("gemini-4-flash-lite")])).toBe("gemini-4-flash-preview-01");
+  });
+  it("accepts the latest alias when it's the only Flash", () => {
+    expect(pickFlashModel([m("gemini-flash-latest"), m("gemini-3.8-pro")])).toBe("gemini-flash-latest");
+  });
+  it("skips models that can't generate content, and returns null if none fit", () => {
+    expect(pickFlashModel([m("gemini-3.8-flash", ["countTokens"])])).toBeNull();
+    expect(pickFlashModel([])).toBeNull();
   });
 });
