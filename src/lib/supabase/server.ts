@@ -5,8 +5,10 @@ import { assertPublicEnv, publicEnv } from "@/lib/env";
 
 /** Per-request Supabase client acting as the signed-in teacher (RLS applies). */
 export async function createClient() {
-  assertPublicEnv();
+  // Read cookies first: this marks every page that uses Supabase as dynamic
+  // (per-request), so `next build` never needs the Supabase settings.
   const cookieStore = await cookies();
+  assertPublicEnv();
   return createServerClient(publicEnv.supabaseUrl, publicEnv.supabaseAnonKey, {
     cookies: {
       getAll: () => cookieStore.getAll(),
