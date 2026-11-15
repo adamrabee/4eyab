@@ -1,36 +1,65 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# حصتي | HISSATI
 
-## Getting Started
+AI-powered school attendance platform for teachers (Arabic, RTL, mobile-first).
 
-First, run the development server:
+**Photograph → AI extraction → review → approval → automatic setup → attendance.**
+
+## Stack
+
+- Next.js 16 (App Router, TypeScript) + Tailwind CSS 4
+- Supabase: PostgreSQL, Auth, Storage, with Row Level Security on every table
+- Anthropic Claude Vision for reading student rosters and timetables (images and PDFs)
+
+## Local development
+
+Requires Node 22+ and Docker.
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+npm run db:up     # local Supabase stack, applies migrations, writes .env.local
+npm run dev       # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+`npm run db:up` generates random **local-only** secrets in `supabase/.env` and `.env.local`.
+Both files are gitignored. Other commands: `npm run db:down`, `npm run db:reset` (deletes local data).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### AI provider
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+`.env.local` defaults to `AI_PROVIDER=mock`. The mock **does not read the uploaded file**.
+It returns clearly-labelled sample data so the upload → review → approve flow can be tested.
+The UI shows a warning banner whenever mock data is used.
 
-## Learn More
+To use real extraction, add to `.env.local` (server-only, never commit):
 
-To learn more about Next.js, take a look at the following resources:
+```
+AI_PROVIDER=anthropic
+ANTHROPIC_API_KEY=...
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+The default model is `claude-opus-5-5`; override it with `ANTHROPIC_MODEL`.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Tests
 
-## Deploy on Vercel
+```bash
+npm test                    # unit + database security tests (needs `npm run db:up`)
+npm run build && npm start  # then, in another shell:
+node e2e/smoke.mjs          # browser end-to-end flow (mock AI)
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Production (Supabase cloud). Not done yet; needs owner approval
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+1. Create a Supabase project and run `supabase/migrations/*.sql` in order (SQL editor or Supabase CLI).
+2. Set the env vars from `.env.example` in the hosting platform. Keep `SUPABASE_SERVICE_ROLE_KEY` and `ANTHROPIC_API_KEY` server-only.
+3. In Supabase Auth, set the Site URL and keep email confirmation **on**.
+
+## Security model
+
+- Each table has a `teacher_id` column. RLS limits every teacher to their own rows.
+- Composite foreign keys `(id, teacher_id)` stop any cross-teacher link, even when the service role is used.
+- Teachers cannot write AI results. Extraction jobs are written server-side. Approval goes through
+  `approve_*_extraction` functions, which save the reviewed data and mark the job approved in one transaction.
+- Uploads go to a private bucket under `<teacher-id>/…`. The server checks each file's real type from its magic bytes and enforces a 20 MB limit and a per-teacher hourly scan limit.
+
+## Backups
+
+`npm run backup` writes a git bundle and a source snapshot to `backups/` (gitignored). It does not contact any remote.
