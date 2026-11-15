@@ -53,6 +53,7 @@ describe("GeminiProvider", () => {
     expect(schema.type).toBe("object");
     expect(Object.keys(schema.properties)).toEqual(expect.arrayContaining(["is_roster", "classroom", "students", "notes"]));
     expect(schema.$schema).toBeUndefined();
+    expect(JSON.stringify(schema)).not.toContain("9007199254740991");
     expect(req.config?.temperature).toBe(0);
 
     // result
@@ -65,7 +66,7 @@ describe("GeminiProvider", () => {
   });
 
   it("extracts a timetable and drops invalid slots", async () => {
-    const { models } = fake({
+    const { models, calls } = fake({
       text: JSON.stringify({
         is_schedule: true,
         entries: [
@@ -77,6 +78,7 @@ describe("GeminiProvider", () => {
     });
     const out = await new GeminiProvider("k", undefined, models).extract({ kind: "schedule", data: img, mime: "image/jpeg" });
     if (out.result.kind !== "schedule") throw new Error("wrong kind");
+    expect(JSON.stringify(calls[0].config?.responseJsonSchema)).not.toContain("9007199254740991");
     expect(out.result.data.entries).toHaveLength(1);
     expect(out.result.data.entries[0]).toMatchObject({ start_time: "07:00", end_time: "07:45", subject: "لغتي" });
   });
@@ -100,12 +102,15 @@ describe("GeminiProvider", () => {
     ["truncated output", { text: '{"is_roster":true', finishReason: "MAX_TOKENS" }, /أكثر من المسموح/],
     ["not JSON", { text: "sorry, I cannot" }, /لم نتمكن من فهم/],
     ["wrong shape", { text: JSON.stringify({ hello: "world" }) }, /صيغة غير متوقعة/],
-    ["invalid API key (Gemini returns 400)", new ApiError({ message: "API key not valid. Please pass a valid API key.", status: 400 }), /مفتاح/],
-    ["unreadable file", new ApiError({ message: "Unable to process input image", status: 400 }), /تعذّرت قراءة الملف/],
-    ["forbidden", new ApiError({ message: "permission denied", status: 403 }), /مفتاح/],
-    ["quota", new ApiError({ message: "quota", status: 429 }), /مشغولة/],
-    ["server", new ApiError({ message: "unavailable", status: 503 }), /تعذّر الاتصال/],
-    ["network", new TypeError("fetch failed"), /تعذّر الاتصال/],
+    ["invalid API key (Gemini returns 400)", new ApiError({ message: "API key not valid. Please pass a valid API key.", status: 400 }), /GEMINI_API_KEY.*رمز الخطأ: 400/],
+    ["API disabled in the Google project", new ApiError({ message: "Generative Language API has not been used in project 123 before or it is disabled. SERVICE_DISABLED", status: 403 }), /غير مفعّلة.*رمز الخطأ: 403/],
+    ["key restricted", new ApiError({ message: "Requests from referer <empty> are blocked. PERMISSION_DENIED", status: 403 }), /لا يملك صلاحية.*رمز الخطأ: 403/],
+    ["unknown model", new ApiError({ message: "models/gemini-x is not found for API version v1beta", status: 404 }), /غير متاح.*رمز الخطأ: 404/],
+    ["unsupported region", new ApiError({ message: "User location is not supported for the API use.", status: 400 }), /منطقة الخادم.*رمز الخطأ: 400/],
+    ["unreadable file", new ApiError({ message: "Unable to process input image", status: 400 }), /تعذّرت قراءة الملف.*رمز الخطأ: 400/],
+    ["quota", new ApiError({ message: "RESOURCE_EXHAUSTED: quota exceeded", status: 429 }), /حصة.*رمز الخطأ: 429/],
+    ["server", new ApiError({ message: "unavailable", status: 503 }), /مؤقتة.*رمز الخطأ: 503/],
+    ["network", new TypeError("fetch failed"), /رمز الخطأ: network/],
   ];
   for (const [name, reply, msg] of failures) {
     it(`gives a clear Arabic error on ${name}`, async () => {

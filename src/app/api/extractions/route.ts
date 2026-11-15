@@ -104,7 +104,14 @@ export async function POST(req: Request) {
     return NextResponse.json({ jobId: job.id, status: "needs_review" });
   } catch (err) {
     const message = err instanceof ExtractionError ? err.userMessage : "تعذّر تحليل الملف. جرّب صورة أوضح.";
-    console.error("extraction failed", { jobId: job.id, err: err instanceof Error ? err.message : err });
+    const cause = err instanceof Error ? (err.cause as { status?: number; message?: string } | undefined) : undefined;
+    console.error("extraction failed", {
+      jobId: job.id,
+      provider: status.provider,
+      message: err instanceof Error ? err.message : String(err),
+      causeStatus: cause?.status,
+      causeMessage: cause?.message?.slice(0, 500),
+    });
     await admin.from("extraction_jobs").update({ status: "failed", error: message }).eq("id", job.id).eq("teacher_id", uid);
     return NextResponse.json({ jobId: job.id, status: "failed", error: message }, { status: 422 });
   }
