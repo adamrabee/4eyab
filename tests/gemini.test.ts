@@ -128,7 +128,7 @@ describe("GeminiProvider", () => {
   for (const [name, reply, msg] of failures) {
     it(`gives a clear Arabic error on ${name}`, async () => {
       const { models } = fake(reply);
-      const p = new GeminiProvider("k", undefined, models).extract({ kind: "roster", data: img, mime: "image/jpeg" });
+      const p = new GeminiProvider("k", undefined, models, { retryDelaysMs: [1, 1] }).extract({ kind: "roster", data: img, mime: "image/jpeg" });
       await expect(p).rejects.toBeInstanceOf(ExtractionError);
       await expect(p).rejects.toThrow(msg);
     });
@@ -150,6 +150,51 @@ describe("GeminiProvider", () => {
     await p.extract({ kind: "roster", data: img, mime: "image/jpeg" });
     expect(calls.at(-1)?.model).toBe("gemini-3.9-flash");
     expect(listCount()).toBe(1);
+  });
+
+  const fast = { retryDelaysMs: [1, 1] };
+  const okRoster = { text: JSON.stringify({ is_roster: true, classroom: { name: "", grade: "", section: "" }, students: [{ full_name: "فهد", student_number: "", confidence: "high" }], notes: "" }) };
+  const overloaded = () => new ApiError({ message: "The model is overloaded. Please try again later.", status: 503 });
+
+  it("retries automatically when Gemini is temporarily overloaded (503)", async () => {
+    const { models, calls } = fake([overloaded(), overloaded(), okRoster]);
+    const out = await new GeminiProvider("k", undefined, models, fast).extract({ kind: "roster", data: img, mime: "image/jpeg" });
+    expect(calls).toHaveLength(3);
+    expect(calls.every((c) => c.model === "gemini-3.8-flash")).toBe(true);
+    expect(out.result.kind === "roster" && out.result.data.students[0].full_name).toBe("فهد");
+  });
+
+  it("switches to another Flash model when the first stays overloaded, without remembering it", async () => {
+    const { models, calls } = fake([overloaded(), overloaded(), overloaded(), okRoster, okRoster], [
+      { name: "models/gemini-3.8-flash", supportedActions: ["generateContent"] },
+      { name: "models/gemini-3.5-flash", supportedActions: ["generateContent"] },
+    ]);
+    const p = new GeminiProvider("k", undefined, models, fast);
+    const out = await p.extract({ kind: "roster", data: img, mime: "image/jpeg" });
+    expect(calls.map((c) => c.model)).toEqual(["gemini-3.8-flash", "gemini-3.8-flash", "gemini-3.8-flash", "gemini-3.5-flash"]);
+    expect(out.model).toBe("gemini-3.5-flash");
+    await p.extract({ kind: "roster", data: img, mime: "image/jpeg" });
+    expect(calls.at(-1)?.model).toBe("gemini-3.8-flash"); // overload is temporary: go back to the default
+  });
+
+  it("gives up with a clear 503 message when everything stays overloaded", async () => {
+    const { models, calls } = fake(overloaded(), [{ name: "models/gemini-3.5-flash", supportedActions: ["generateContent"] }]);
+    await expect(new GeminiProvider("k", undefined, models, fast).extract({ kind: "roster", data: img, mime: "image/jpeg" })).rejects.toThrow(/مؤقتة.*503/);
+    expect(calls).toHaveLength(6); // 3 attempts × 2 models, then stop
+  });
+
+  it("does not retry errors that won't fix themselves (e.g. invalid key)", async () => {
+    const { models, calls } = fake(new ApiError({ message: "API key not valid", status: 400 }));
+    await expect(new GeminiProvider("k", undefined, models, fast).extract({ kind: "roster", data: img, mime: "image/jpeg" })).rejects.toThrow(/GEMINI_API_KEY/);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("stops retrying when the time budget is nearly used up", async () => {
+    const { models, calls } = fake(overloaded(), [{ name: "models/gemini-3.5-flash", supportedActions: ["generateContent"] }]);
+    await expect(
+      new GeminiProvider("k", undefined, models, { retryDelaysMs: [1, 1], budgetMs: 1_000 }).extract({ kind: "roster", data: img, mime: "image/jpeg" }),
+    ).rejects.toThrow(/503/);
+    expect(calls).toHaveLength(1);
   });
 
   it("keeps the clear 404 message when no alternative model exists", async () => {

@@ -116,21 +116,32 @@ export function pickFlashModel(models: ModelInfo[]): string | null {
  * validated against the same Zod schema, then cleaned (Arabic name
  * normalisation, de-duplication, time/period checks) before the teacher reviews it.
  */
+/** Temporary server-side failures worth retrying (503 = model overloaded). */
+function isTransient(err: unknown): boolean {
+  return err instanceof ApiError && (err.status === 500 || err.status === 502 || err.status === 503 || err.status === 504);
+}
+
 export class GeminiProvider implements ExtractionProvider {
   readonly name = "gemini" as const;
   private models: GeminiModels;
   private model: string;
+  private retryDelaysMs: number[];
+  private budgetMs: number;
 
-  constructor(apiKey: string, model?: string, models?: GeminiModels) {
-    this.models = models ?? new GoogleGenAI({ apiKey, httpOptions: { timeout: 120_000 } }).models;
+  constructor(apiKey: string, model?: string, models?: GeminiModels, opts?: { retryDelaysMs?: number[]; budgetMs?: number }) {
+    this.models = models ?? new GoogleGenAI({ apiKey, httpOptions: { timeout: 90_000 } }).models;
     this.model = model || DEFAULT_MODEL;
+    // waits between attempts when Gemini is temporarily overloaded (503 etc.)
+    this.retryDelaysMs = opts?.retryDelaysMs ?? [2_000, 5_000];
+    this.budgetMs = opts?.budgetMs ?? 150_000;
   }
 
-  /** Ask Google which models this key can use and pick the best Flash model. */
-  private async discover(): Promise<string | null> {
+  /** Ask Google which models this key can use and pick the best Flash model other than `exclude`. */
+  private async discover(exclude?: string): Promise<string | null> {
     const found: ModelInfo[] = [];
     const pager = await this.models.list({ config: { pageSize: 100 } });
     for await (const m of pager) {
+      if (m.name?.replace(/^models\//, "") === exclude) continue;
       found.push({ name: m.name, supportedActions: m.supportedActions });
       if (found.length >= 300) break;
     }
@@ -161,23 +172,42 @@ export class GeminiProvider implements ExtractionProvider {
         },
       });
 
+    // Stay well inside the hosting function's time limit (route maxDuration = 180 s).
+    const deadline = Date.now() + this.budgetMs;
+
+    // Call a model, retrying temporary overloads (503 …) with short waits.
+    const attempt = async (m: string) => {
+      for (let i = 0; ; i++) {
+        try {
+          return await request(m);
+        } catch (err) {
+          const wait = this.retryDelaysMs[i];
+          if (!isTransient(err) || wait === undefined || Date.now() + wait + 15_000 > deadline) throw err;
+          console.warn("gemini: temporary error, retrying", { model: m, status: (err as ApiError).status, attempt: i + 1 });
+          await new Promise((r) => setTimeout(r, this.retryDelaysMs[i]));
+        }
+      }
+    };
+
     let model = discoveredModel ?? this.model;
     let res: Awaited<ReturnType<typeof request>>;
     try {
-      res = await request(model);
+      res = await attempt(model);
     } catch (err) {
-      // Model retired or not available to this key: find one that is, retry once.
-      if (!(err instanceof ApiError && err.status === 404)) throw geminiError(err, model);
-      const fallback = await this.discover().catch(() => null);
-      if (!fallback || fallback === model) throw geminiError(err, model);
-      console.warn("gemini: model unavailable, using discovered model", { requested: model, using: fallback });
-      model = fallback;
+      // 404: model retired / not available to this key. Persistent 5xx: model
+      // overloaded. Either way, try the best other Flash model once.
+      const unavailable = err instanceof ApiError && err.status === 404;
+      if ((!unavailable && !isTransient(err)) || Date.now() + 20_000 > deadline) throw geminiError(err, model);
+      const fallback = await this.discover(model).catch(() => null);
+      if (!fallback) throw geminiError(err, model);
+      console.warn("gemini: switching model", { from: model, to: fallback, reason: (err as ApiError).status });
       try {
-        res = await request(model);
-        discoveredModel = model;
+        res = await attempt(fallback);
       } catch (err2) {
-        throw geminiError(err2, model);
+        throw geminiError(err2, fallback);
       }
+      model = fallback;
+      if (unavailable) discoveredModel = fallback; // remember only when the old model is gone
     }
     const text = res.text;
     const finish = res.candidates?.[0]?.finishReason;
