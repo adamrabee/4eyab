@@ -50,6 +50,24 @@ psql_db() { # run psql against local db as postgres (same role migrations use on
   PGPASSWORD="$POSTGRES_PASSWORD" psql -v ON_ERROR_STOP=1 -q -h 127.0.0.1 -p 54322 -U postgres -d postgres "$@"
 }
 
+rest_ready() { # PostgREST must have loaded the schema (incl. app tables) before the app can use it
+  # shellcheck disable=SC1090
+  source "$ENVF"
+  [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:54321/rest/v1/$1?select=id&limit=1" \
+        -H "apikey: $SERVICE_ROLE_KEY" -H "Authorization: Bearer $SERVICE_ROLE_KEY")" = "200" ]
+}
+
+wait_rest() {
+  echo -n "waiting for REST schema"
+  for _ in $(seq 1 60); do
+    if rest_ready uploads; then echo " ready"; return; fi
+    # ask PostgREST to reload its schema cache, then retry
+    psql_db -c "notify pgrst, 'reload schema'" >/dev/null 2>&1 || true
+    echo -n "."; sleep 2
+  done
+  echo; echo "REST API did not load the schema" >&2; exit 1
+}
+
 wait_ready() {
   echo -n "waiting for services"
   for _ in $(seq 1 90); do
@@ -95,7 +113,7 @@ write_app_env() {
 }
 
 case "${1:-up}" in
-  up) ensure_docker; gen_env; mkdir -p "$SB/volumes/data" "$SB/volumes/storage"; "${COMPOSE[@]}" up -d; wait_ready; migrate; write_app_env ;;
+  up) ensure_docker; gen_env; mkdir -p "$SB/volumes/data" "$SB/volumes/storage"; "${COMPOSE[@]}" up -d; wait_ready; migrate; wait_rest; write_app_env ;;
   down) ensure_docker; "${COMPOSE[@]}" down ;;
   reset) ensure_docker; gen_env; "${COMPOSE[@]}" down -v || true; rm -rf "$SB/volumes/data" "$SB/volumes/storage"; exec "$0" up ;;
   migrate) migrate ;;

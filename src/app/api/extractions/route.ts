@@ -53,7 +53,10 @@ export async function POST(req: Request) {
   // 1) store the original privately under the teacher's folder (RLS-checked)
   const path = `${uid}/${randomUUID()}.${EXT[mime]}`;
   const up = await supabase.storage.from("uploads").upload(path, buf, { contentType: mime, upsert: false });
-  if (up.error) return fail(500, "تعذّر حفظ الملف");
+  if (up.error) {
+    console.error("upload: storage error", { uid, message: up.error.message });
+    return fail(500, "تعذّر حفظ الملف");
+  }
 
   const { data: upload, error: upErr } = await supabase
     .from("uploads")
@@ -61,6 +64,7 @@ export async function POST(req: Request) {
     .select("id")
     .single();
   if (upErr || !upload) {
+    console.error("upload: uploads row insert failed", { uid, code: upErr?.code, message: upErr?.message });
     await supabase.storage.from("uploads").remove([path]);
     return fail(500, "تعذّر حفظ الملف");
   }
@@ -71,7 +75,10 @@ export async function POST(req: Request) {
     .insert({ teacher_id: uid, upload_id: upload.id, kind, provider: status.provider, status: "processing" })
     .select("id")
     .single();
-  if (jobErr || !job) return fail(500, "تعذّر بدء التحليل");
+  if (jobErr || !job) {
+    console.error("upload: job insert failed", { uid, code: jobErr?.code, message: jobErr?.message });
+    return fail(500, "تعذّر بدء التحليل");
+  }
 
   // 3) run extraction
   try {

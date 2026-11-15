@@ -51,11 +51,11 @@ await shot("04-roster-review");
 step("roster upload → review (mock clearly labelled)");
 
 await page.fill("#c-name", "ثاني متوسط ١");
-await page.getByLabel("اسم الطالب 1").fill("محمد عبدالله الشهري");
+await page.getByLabel("اسم الطالب 1").fill("عبدالعزيز سلطان ناصر آل مفلح");
 await page.getByRole("button", { name: /اعتماد وحفظ 8 طالب/ }).click();
 await page.waitForURL(/\/classrooms\/[0-9a-f-]{36}/);
 await page.getByText("تمت إضافة 8 طالب").waitFor();
-await page.getByText("محمد عبدالله الشهري").waitFor();
+await page.getByText("عبدالعزيز سلطان ناصر آل مفلح").waitFor();
 await shot("05-classroom");
 step("approve roster → classroom with 8 students (edit applied)");
 
@@ -71,6 +71,9 @@ await page.locator("input[type=file]:not([capture])").setInputFiles(img);
 await page.getByRole("button", { name: "حلّل المستند" }).click();
 await page.waitForURL(/\/scan\/[0-9a-f-]{36}$/);
 await page.getByText("ربط الفصول").waitFor();
+// map the timetable's "فصل تجريبي" onto the roster classroom created above
+const map = page.getByLabel("ربط فصل تجريبي", { exact: true });
+await map.selectOption({ label: "ثاني متوسط ١" });
 await shot("06-schedule-review");
 await page.getByRole("button", { name: /اعتماد وحفظ 15 حصة/ }).click();
 await page.waitForURL("**/schedule?saved=1");
@@ -78,8 +81,78 @@ await page.getByText("تم حفظ الجدول").waitFor();
 await shot("07-schedule");
 step("approve schedule → schedule page");
 
+// ---- attendance (modelled on the original sheet's workflow)
+const t = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Riyadh" }));
+t.setDate(t.getDate() - t.getDay()); // most recent Sunday (school day with mock periods)
+const sunday = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+await page.goto(`${BASE}/attendance?date=${sunday}`);
+await page.getByText("ثاني متوسط ١").first().waitFor();
+await shot("08-attendance-hub");
+await page.getByRole("link", { name: /الحصة\s*1\s*ثاني متوسط ١/ }).click();
+await page.waitForURL(/\/attendance\/[0-9a-f-]{36}\?date=.*&period=1/);
+await page.getByRole("group", { name: "حالة طالب تجريبي 2" }).getByRole("button", { name: "غائب" }).click();
+await page.getByRole("group", { name: "حالة طالب تجريبي 3" }).getByRole("button", { name: "غائب" }).click();
+await page.getByRole("group", { name: "حالة طالب تجريبي 4" }).getByRole("button", { name: "متأخر" }).click();
+await page.getByRole("group", { name: "حالة طالب تجريبي 5" }).getByRole("button", { name: "مستأذن" }).click();
+await page.getByRole("group", { name: "حالة طالب تجريبي 3" }).getByRole("button", { name: "غائب" }).click(); // undo
+await page.getByText("تم الحفظ ✓").waitFor({ timeout: 15000 });
+await page.getByText("الغائبون: 1").waitFor();
+await shot("09-taking");
+await page.reload();
+await page.getByText("الغائبون: 1").waitFor();
+await page.getByText("متأخر: 1").waitFor();
+step("take attendance: absent/late/excused, autosaved, survives reload");
+
+// sheet + PDF
+await page.getByRole("link", { name: /كشف الغائبين/ }).click();
+await page.getByRole("heading", { name: "كشف الطلاب الغائبين" }).waitFor();
+await page.locator("article").getByText("أ. نورة القحطاني").waitFor();
+await shot("10-sheet");
+const [pdf] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "تحميل PDF" }).click()]);
+const pdfPath = path.join(OUT, "sheet.pdf");
+await pdf.saveAs(pdfPath);
+if (!fs.readFileSync(pdfPath).subarray(0, 4).equals(Buffer.from("%PDF"))) throw new Error("not a PDF");
+step(`absence sheet + PDF download (${fs.statSync(pdfPath).size} bytes)`);
+
+// period 5: copy absences from the previous period
+await page.goto(`${BASE}/attendance?date=${sunday}`);
+await page.getByRole("link", { name: /الحصة\s*5\s*ثاني متوسط ١/ }).click();
+await page.getByRole("button", { name: "نفس غياب الحصة 1" }).click();
+await page.getByText("تم الحفظ ✓").waitFor({ timeout: 15000 });
+await page.getByText("الغائبون: 1").waitFor();
+step("same-as-previous-period copies absences");
+
+// period 3 (other class has no students) → empty state; mark whole class present elsewhere
+await page.goto(`${BASE}/attendance?date=${sunday}`);
+await page.getByText("غياب: 1").first().waitFor();
+await shot("11-hub-after");
+step("hub shows per-period absence counts");
+
+// reports + Excel
+await page.goto(`${BASE}/reports?preset=90`);
+await page.getByText("الحصص المسجّلة", { exact: true }).waitFor();
+await page.getByRole("row", { name: /طالب تجريبي 2/ }).getByText("2").first().waitFor();
+await shot("12-reports");
+const [xl] = await Promise.all([page.waitForEvent("download"), page.getByRole("link", { name: /Excel/ }).click()]);
+const xlPath = path.join(OUT, "report.xlsx");
+await xl.saveAs(xlPath);
+const ExcelJS = (await import("exceljs")).default;
+const wb = new ExcelJS.Workbook();
+await wb.xlsx.readFile(xlPath);
+const s1 = wb.getWorksheet("الملخص");
+const r = s1.getRows(5, 9).find((row) => row.getCell(2).value === "طالب تجريبي 2");
+if (!r || r.getCell(5).value !== 2) throw new Error("Excel summary wrong: " + JSON.stringify(r?.values));
+if (!s1.views[0].rightToLeft) throw new Error("Excel sheet is not RTL");
+step("reports page + Excel export verified (RTL, absent count = 2)");
+
+await page.getByRole("link", { name: "طالب تجريبي 4" }).click();
+await page.getByText("الغياب والتأخر والاستئذان").waitFor();
+await page.getByText("متأخر", { exact: true }).last().waitFor();
+await shot("13-student");
+step("student history page");
+
 await page.goto(`${BASE}/dashboard`);
-await shot("08-dashboard");
+await shot("14-dashboard");
 step("dashboard with data");
 
 // isolation: a second teacher sees none of it

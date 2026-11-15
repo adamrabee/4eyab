@@ -4,6 +4,19 @@ AI-powered school attendance platform for teachers (Arabic, RTL, mobile-first).
 
 **Photograph → AI extraction → review → approval → automatic setup → attendance.**
 
+## Features
+
+- Teacher accounts (Supabase Auth); each teacher's data is fully isolated.
+- **Smart scan**: photograph or upload (image/PDF) a student roster or weekly timetable. Claude extracts it, the teacher reviews and corrects it, then approves.
+- Classrooms and students: add, edit, reorder, archive. Removing a student keeps their history.
+- Weekly timetable: grid and per-day editor, plus "today's periods" on the dashboard.
+- **Attendance** (modelled on the original single-file sheet): week → day → period navigation. Every student starts as present. One tap sets absent, late (with minutes) or excused, and each change autosaves.
+  Tools: copy the previous period's absences, copy names, clear the period, record "everyone present".
+- **Official absence sheet** (كشف الطلاب الغائبين): Hijri (Umm al-Qura) and Gregorian dates, period, subject,
+  numbered absentees, late and excused sections, teacher name and signature line. A4 print or direct PDF download (canvas-rendered so Arabic letters stay joined).
+- **Reports**: per-student totals and attendance rate for any date range, session history, per-student history,
+  an **Excel** export (RTL, summary and detail sheets) and a print/PDF version.
+
 ## Stack
 
 - Next.js 16 (App Router, TypeScript) + Tailwind CSS 4

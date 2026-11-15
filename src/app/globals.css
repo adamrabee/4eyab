@@ -93,6 +93,8 @@ body {
   unicode-bidi: isolate;
 }
 @media print {
+  @page { size: A4; margin: 16mm 14mm; }
   .no-print { display: none !important; }
-  body { background: #fff; }
+  body { background: #fff; color: #111; }
+  main { padding: 0 !important; max-width: none !important; }
 }

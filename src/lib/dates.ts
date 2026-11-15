@@ -40,3 +40,27 @@ export function formatDateAr(iso: string): string {
 export function formatTime(t: string | null | undefined): string {
   return t ? t.slice(0, 5) : "";
 }
+
+/** Hijri (Umm al-Qura) date as used on official Saudi school forms, e.g. "٢٤ جمادى الأولى ١٤٤٨ هـ". */
+export function formatHijri(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  try {
+    return new Intl.DateTimeFormat("ar-SA-u-ca-islamic-umalqura", {
+      day: "numeric", month: "long", year: "numeric", timeZone: "UTC",
+    }).format(new Date(Date.UTC(y, m - 1, d)));
+  } catch {
+    return iso;
+  }
+}
+
+/** Short Gregorian date "١٥/١١/٢٠٢٦". */
+export function formatShortDate(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Intl.DateTimeFormat("ar-SA-u-ca-gregory", { day: "numeric", month: "numeric", year: "numeric", timeZone: "UTC" })
+    .format(new Date(Date.UTC(y, m - 1, d)));
+}
+
+/** Sunday that starts the school week containing `iso` (pure date math, no timezone drift). */
+export function weekStart(iso: string): string {
+  return addDays(iso, -dayOfWeek(iso));
+}
