@@ -6,7 +6,7 @@ AI-powered school attendance platform for teachers (Arabic, RTL, mobile-first).
 
 ## Features
 
-- Teacher accounts (Supabase Auth); each teacher's data is fully isolated.
+- **Simple school-only accounts**: teachers register themselves with name, username, password and the **school code**, then log in with username + password. There's no email and no confirmation, and nobody without the code can register (enforced inside the database). Each teacher's data is fully isolated.
 - **Smart scan**: photograph or upload (image/PDF) a student roster or weekly timetable. Claude extracts it, the teacher reviews and corrects it, then approves.
 - Classrooms and students: add, edit, reorder, archive. Removing a student keeps their history.
 - Weekly timetable: grid and per-day editor, plus "today's periods" on the dashboard.
@@ -66,13 +66,11 @@ Project **`hissati`** (ref `aljxcqxxhzxluppdeemc`, region `ap-south-1` Mumbai, f
 All migrations in `supabase/migrations/` are applied, and the Supabase security advisor shows
 only the two intentional `SECURITY DEFINER` approval functions (documented in migration 3).
 
-### Still to do in the Supabase dashboard (owner)
-1. **Authentication → URL Configuration**
-   - Site URL: `https://<your-domain>`
-   - Redirect URLs: `https://<your-domain>/auth/confirm`
-2. **Authentication → Providers → Email**: keep **Confirm email** ON.
-3. **Authentication → Emails → SMTP**: before inviting many teachers, connect your own SMTP
-   (the built-in sender is heavily rate-limited and meant for testing only).
+### Accounts (no email)
+Usernames map internally to `<username>@hissati.invalid` (a reserved domain that can never receive mail).
+The server creates accounts with the admin API and marks them `app_metadata.hissati_member = true`.
+Migration 4 rejects any other sign-up at commit time, which blocks direct sign-ups using the public key.
+A forgotten password can be reset in Supabase → Authentication → Users.
 
 ### Hosting environment variables (e.g. Vercel → Project → Settings → Environment Variables)
 | Name | Value | Secret? |
@@ -80,16 +78,12 @@ only the two intentional `SECURITY DEFINER` approval functions (documented in mi
 | `NEXT_PUBLIC_SUPABASE_URL` | `https://aljxcqxxhzxluppdeemc.supabase.co` | no |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | the project's **publishable** key (`sb_publishable_…`, Project Settings → API Keys) | no (public by design) |
 | `SUPABASE_SERVICE_ROLE_KEY` | the **secret** key (`sb_secret_…` or legacy `service_role`) | **YES, server only** |
-| `NEXT_PUBLIC_SITE_URL` | `https://<your-domain>` | no |
+| `SCHOOL_CODE` | a code you choose and share with your teachers | **YES, server only** |
+| `SCHOOL_NAME` | your school's name (shown on login) | no |
 | `AI_PROVIDER` | `mock` until a key is added, then `anthropic` | no |
 | `ANTHROPIC_API_KEY` | from console.anthropic.com | **YES, server only** |
 
 Never commit real values. `.env*` files are gitignored, except `.env.example`.
-
-### Local testing of email confirmation
-The local stack includes Mailpit (http://localhost:54324). Start auth with confirmation on:
-`LOCAL_AUTOCONFIRM=false docker compose -f supabase/docker-compose.yml --env-file supabase/.env up -d auth mail`,
-then run `node e2e/email-confirm.mjs`.
 
 ## Security model
 

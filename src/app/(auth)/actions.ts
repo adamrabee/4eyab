@@ -1,72 +1,89 @@
 "use server";
-import { headers } from "next/headers";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { isValidUsername, normalizeUsername, usernameToEmail } from "@/lib/auth/username";
 
 export type AuthState = { error?: string; fields?: Record<string, string> } | undefined;
 
 const loginSchema = z.object({
-  email: z.string().trim().toLowerCase().email("البريد الإلكتروني غير صحيح"),
+  username: z.string().transform(normalizeUsername).refine(isValidUsername, "اسم المستخدم غير صحيح"),
   password: z.string().min(1, "أدخل كلمة المرور"),
   next: z.string().optional(),
 });
 
 const signupSchema = z.object({
   full_name: z.string().trim().min(2, "أدخل اسمك الكامل").max(120),
-  school_name: z.string().trim().max(160).optional().default(""),
-  email: z.string().trim().toLowerCase().email("البريد الإلكتروني غير صحيح"),
-  password: z.string().min(8, "كلمة المرور 8 أحرف على الأقل").max(72),
+  username: z
+    .string()
+    .transform(normalizeUsername)
+    .refine(isValidUsername, "اسم المستخدم: 3 أحرف أو أكثر، بالإنجليزية أو أرقام فقط (مثل noura أو رقم جوالك)"),
+  password: z.string().min(8, "كلمة المرور 8 أحرف أو أرقام على الأقل").max(72),
+  school_code: z.string().trim().min(1, "أدخل رمز المدرسة"),
 });
-
-/** Public base URL of the site, used in email links. Prefer the configured value. */
-async function siteUrl() {
-  const configured = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/+$/, "");
-  if (configured) return configured;
-  const h = await headers();
-  const host = h.get("x-forwarded-host") ?? h.get("host") ?? "localhost:3000";
-  const proto = h.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
-  return `${proto}://${host}`;
-}
 
 /** Only allow same-site relative redirects. */
 function safeNext(next?: string) {
   return next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard";
 }
 
+/** Constant-time comparison of the school code (server-only env var). */
+function schoolCodeMatches(input: string): boolean {
+  const expected = process.env.SCHOOL_CODE?.trim();
+  if (!expected) return false;
+  const a = createHash("sha256").update(input.trim()).digest();
+  const b = createHash("sha256").update(expected).digest();
+  return timingSafeEqual(a, b);
+}
+
 export async function login(_: AuthState, form: FormData): Promise<AuthState> {
-  const parsed = loginSchema.safeParse(Object.fromEntries(form));
-  if (!parsed.success) return { error: parsed.error.issues[0].message, fields: { email: String(form.get("email") ?? "") } };
+  const raw = Object.fromEntries(form) as Record<string, string>;
+  const parsed = loginSchema.safeParse(raw);
+  if (!parsed.success) return { error: "اسم المستخدم أو كلمة المرور غير صحيحة", fields: { username: raw.username ?? "" } };
   const supabase = await createClient();
-  const { error } = await supabase.auth.signInWithPassword({ email: parsed.data.email, password: parsed.data.password });
-  if (error) {
-    return { error: "البريد الإلكتروني أو كلمة المرور غير صحيحة", fields: { email: parsed.data.email } };
-  }
+  const { error } = await supabase.auth.signInWithPassword({
+    email: usernameToEmail(parsed.data.username),
+    password: parsed.data.password,
+  });
+  if (error) return { error: "اسم المستخدم أو كلمة المرور غير صحيحة", fields: { username: parsed.data.username } };
   redirect(safeNext(parsed.data.next));
 }
 
 export async function signup(_: AuthState, form: FormData): Promise<AuthState> {
   const raw = Object.fromEntries(form) as Record<string, string>;
+  // keep what the teacher typed (except the password) so an error doesn't wipe the form
+  const fields = { full_name: raw.full_name ?? "", username: raw.username ?? "", school_code: raw.school_code ?? "" };
+  if (!process.env.SCHOOL_CODE?.trim()) return { error: "التسجيل غير مفعّل بعد على هذا الموقع.", fields };
   const parsed = signupSchema.safeParse(raw);
-  const fields = { full_name: raw.full_name ?? "", school_name: raw.school_name ?? "", email: raw.email ?? "" };
   if (!parsed.success) return { error: parsed.error.issues[0].message, fields };
-  const supabase = await createClient();
-  const { data, error } = await supabase.auth.signUp({
-    email: parsed.data.email,
-    password: parsed.data.password,
-    options: {
-      data: { full_name: parsed.data.full_name, school_name: parsed.data.school_name },
-      emailRedirectTo: `${await siteUrl()}/auth/confirm?next=/dashboard`,
-    },
+  const { full_name, username, password, school_code } = parsed.data;
+
+  if (!schoolCodeMatches(school_code)) {
+    await new Promise((r) => setTimeout(r, 800)); // slow down guessing
+    return { error: "رمز المدرسة غير صحيح", fields: { ...fields, school_code: "" } };
+  }
+
+  // Create the account server-side: no email is sent, and the membership marker
+  // lets it past the database guard that blocks every other kind of sign-up.
+  const admin = createAdminClient();
+  const { error: createErr } = await admin.auth.admin.createUser({
+    email: usernameToEmail(username),
+    password,
+    email_confirm: true,
+    app_metadata: { hissati_member: true },
+    user_metadata: { full_name, username, school_name: process.env.SCHOOL_NAME ?? "" },
   });
-  if (error) {
-    const msg = /registered|exists/i.test(error.message) ? "هذا البريد مسجّل مسبقًا" : "تعذّر إنشاء الحساب، حاول مرة أخرى";
-    return { error: msg, fields };
+  if (createErr) {
+    const taken = /already|exists|registered/i.test(createErr.message) || createErr.status === 422;
+    if (!taken) console.error("signup: createUser failed", { status: createErr.status, message: createErr.message });
+    return { error: taken ? "اسم المستخدم محجوز، اختر اسمًا آخر" : "تعذّر إنشاء الحساب، حاول مرة أخرى", fields };
   }
-  if (!data.session) {
-    // Email confirmation is enabled on this Supabase project.
-    redirect("/login?confirm=1");
-  }
+
+  const supabase = await createClient();
+  const { error } = await supabase.auth.signInWithPassword({ email: usernameToEmail(username), password });
+  if (error) redirect("/login");
   redirect("/dashboard");
 }
 

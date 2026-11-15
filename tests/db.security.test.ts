@@ -33,6 +33,20 @@ run("multi-teacher isolation (RLS)", () => {
     await deleteTeacher(b.id);
   });
 
+  it("rejects sign-ups that don't come from the app (school-only accounts)", async () => {
+    const { createClient } = await import("@supabase/supabase-js");
+    const anon = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, {
+      auth: { persistSession: false },
+    });
+    const email = `outsider-${Date.now()}@example.test`;
+    const pub = await anon.auth.signUp({ email, password: "outsider-pass-1", options: { data: { hissati_member: true } } });
+    expect(pub.error).not.toBeNull();
+    const noMarker = await admin().auth.admin.createUser({ email: `nomarker-${Date.now()}@hissati.invalid`, password: "pw-123456789", email_confirm: true });
+    expect(noMarker.error).not.toBeNull();
+    const { data } = await admin().auth.admin.listUsers({ perPage: 1000 });
+    expect(data.users.some((u) => u.email === email)).toBe(false);
+  });
+
   it("creates a profile automatically on signup", async () => {
     const { data } = await a.client.from("profiles").select("full_name").single();
     expect(data?.full_name).toBe("المعلم أ");

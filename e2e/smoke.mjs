@@ -33,18 +33,34 @@ page.on("pageerror", (e) => errors.push(e.message));
 const shot = (n) => page.screenshot({ path: path.join(OUT, `${n}.png`), fullPage: true });
 const step = (m) => console.log("✓", m);
 
-const email = `e2e-${Date.now()}@example.test`;
+const SCHOOL_CODE = process.env.SCHOOL_CODE ?? "local-school-code";
+const username = `noura${Date.now() % 1e8}`;
 await page.goto(`${BASE}/signup`);
 await page.fill("#full_name", "أ. نورة القحطاني");
-await page.fill("#school_name", "متوسطة التجربة");
-await page.fill("#email", email);
+await page.fill("#username", username);
 await page.fill("#password", "e2e-password-123");
+await page.fill("#school_code", "wrong-code");
 await shot("01-signup");
+await page.click("button[type=submit]");
+await page.getByText("رمز المدرسة غير صحيح").waitFor();
+step("wrong school code is rejected");
+await page.fill("#password", "e2e-password-123");
+await page.fill("#school_code", SCHOOL_CODE);
 await page.click("button[type=submit]");
 await page.waitForURL("**/dashboard");
 await page.getByText("لنبدأ بإعداد فصولك").waitFor();
 await shot("02-dashboard-empty");
-step("signup → empty dashboard");
+step("signup with username + school code → straight in, no email");
+
+// log out, then back in with username + password
+await page.goto(`${BASE}/dashboard`);
+await page.getByRole("button", { name: /خروج/ }).first().click();
+await page.waitForURL("**/login");
+await page.fill("#username", username.toUpperCase()); // case-insensitive
+await page.fill("#password", "e2e-password-123");
+await page.click("button[type=submit]");
+await page.waitForURL("**/dashboard");
+step("logout → login with username + password");
 
 // roster scan, using a large phone-size photo
 await page.goto(`${BASE}/scan`);
@@ -178,13 +194,18 @@ const ctx2 = await browser.newContext({ ...devices["iPhone 13"] });
 const p2 = await ctx2.newPage();
 await p2.goto(`${BASE}/signup`);
 await p2.fill("#full_name", "معلم آخر");
-await p2.fill("#email", `e2e-other-${Date.now()}@example.test`);
+await p2.fill("#username", username); // already taken
+await p2.fill("#password", "e2e-password-123");
+await p2.fill("#school_code", SCHOOL_CODE);
+await p2.click("button[type=submit]");
+await p2.getByText("اسم المستخدم محجوز").waitFor();
+await p2.fill("#username", `${username}b`);
 await p2.fill("#password", "e2e-password-123");
 await p2.click("button[type=submit]");
 await p2.waitForURL("**/dashboard");
 await p2.goto(`${BASE}/classrooms`);
 await p2.getByText("لا توجد فصول بعد").waitFor();
-step("second teacher sees no data from the first");
+step("taken username rejected; second teacher sees no data from the first");
 
 await browser.close();
 if (errors.length) {

@@ -12,12 +12,21 @@ export function hasLocalStack() {
 export const admin = () =>
   createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
 
+/** Create a teacher the way the app does (admin API + school membership marker), then sign in. */
 export async function newTeacher(name = "معلم اختبار"): Promise<{ client: SupabaseClient; id: string; email: string }> {
-  const email = `t-${randomUUID()}@example.test`;
+  const email = `t-${randomUUID()}@hissati.invalid`;
   const password = `pw-${randomUUID()}`;
+  const { data, error } = await admin().auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    app_metadata: { hissati_member: true },
+    user_metadata: { full_name: name },
+  });
+  if (error || !data.user) throw error ?? new Error("createUser failed");
   const client = createClient(url, anonKey, { auth: { persistSession: false, autoRefreshToken: false } });
-  const { data, error } = await client.auth.signUp({ email, password, options: { data: { full_name: name } } });
-  if (error || !data.user) throw error ?? new Error("signup failed");
+  const signIn = await client.auth.signInWithPassword({ email, password });
+  if (signIn.error) throw signIn.error;
   return { client, id: data.user.id, email };
 }
 

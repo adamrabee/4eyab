@@ -4,18 +4,17 @@ import { useActionState } from "react";
 import { login } from "../actions";
 import { Alert, Button, Card, Field, Input } from "@/components/ui";
 
-export function LoginForm({ next, confirm, confirmError }: { next?: string; confirm?: boolean; confirmError?: boolean }) {
+export function LoginForm({ next, school }: { next?: string; school: string }) {
   const [state, action, pending] = useActionState(login, undefined);
   return (
     <Card>
-      <h1 className="mb-4 text-xl font-bold">تسجيل الدخول</h1>
-      <form action={action} className="space-y-4">
-        {confirm && <Alert tone="info">أرسلنا رابط تأكيد إلى بريدك. أكّد حسابك ثم سجّل الدخول.</Alert>}
-        {confirmError && <Alert>رابط التأكيد غير صالح أو منتهي الصلاحية. سجّل الدخول، أو أنشئ الحساب من جديد لإرسال رابط جديد.</Alert>}
+      <h1 className="text-xl font-bold">تسجيل الدخول</h1>
+      {school && <p className="mt-1 text-sm text-muted">{school}</p>}
+      <form action={action} className="mt-4 space-y-4">
         {state?.error && <Alert>{state.error}</Alert>}
         <input type="hidden" name="next" value={next ?? ""} />
-        <Field label="البريد الإلكتروني" htmlFor="email">
-          <Input id="email" name="email" type="email" dir="ltr" autoComplete="email" required defaultValue={state?.fields?.email} />
+        <Field label="اسم المستخدم" htmlFor="username">
+          <Input id="username" name="username" dir="ltr" autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} required defaultValue={state?.fields?.username} />
         </Field>
         <Field label="كلمة المرور" htmlFor="password">
           <Input id="password" name="password" type="password" dir="ltr" autoComplete="current-password" required />
@@ -25,9 +24,9 @@ export function LoginForm({ next, confirm, confirmError }: { next?: string; conf
         </Button>
       </form>
       <p className="mt-4 text-center text-sm text-muted">
-        ليس لديك حساب؟{" "}
+        أول مرة؟{" "}
         <Link href="/signup" className="font-medium text-primary">
-          أنشئ حسابًا
+          أنشئ حسابك برمز المدرسة
         </Link>
       </p>
     </Card>
