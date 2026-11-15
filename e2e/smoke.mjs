@@ -18,6 +18,12 @@ fs.mkdirSync(OUT, { recursive: true });
 const png = await sharp({ create: { width: 600, height: 800, channels: 3, background: "#ffffff" } }).png().toBuffer();
 const img = path.join(OUT, "sample.png");
 fs.writeFileSync(img, png);
+// a realistic phone photo: 4032x3024 with noise, several MB (above Vercel's 4.5 MB body limit)
+const noise = Buffer.alloc(4032 * 3024 * 3);
+for (let i = 0; i < noise.length; i++) noise[i] = (i * 2654435761) >>> 24;
+const bigPhoto = path.join(OUT, "phone-photo.jpg");
+fs.writeFileSync(bigPhoto, await sharp(noise, { raw: { width: 4032, height: 3024, channels: 3 } }).jpeg({ quality: 95 }).toBuffer());
+console.log(`  (test photo: ${(fs.statSync(bigPhoto).size / 1024 / 1024).toFixed(1)} MB)`);
 
 const browser = await chromium.launch();
 const ctx = await browser.newContext({ ...devices["iPhone 13"], locale: "ar-SA" });
@@ -40,9 +46,9 @@ await page.getByText("لنبدأ بإعداد فصولك").waitFor();
 await shot("02-dashboard-empty");
 step("signup → empty dashboard");
 
-// roster scan
+// roster scan, using a large phone-size photo
 await page.goto(`${BASE}/scan`);
-await page.locator("input[type=file]:not([capture])").setInputFiles(img);
+await page.locator("input[type=file]:not([capture])").setInputFiles(bigPhoto);
 await shot("03-scan-selected");
 await page.getByRole("button", { name: "حلّل المستند" }).click();
 await page.waitForURL(/\/scan\/[0-9a-f-]{36}$/);
@@ -154,6 +160,18 @@ step("student history page");
 await page.goto(`${BASE}/dashboard`);
 await shot("14-dashboard");
 step("dashboard with data");
+
+// the API refuses a path in someone else's storage folder
+const forged = await page.evaluate(async () => {
+  const r = await fetch("/api/extractions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ kind: "roster", path: "00000000-0000-0000-0000-000000000000/11111111-1111-1111-1111-111111111111.png" }),
+  });
+  return r.status;
+});
+if (forged !== 400) throw new Error(`forged path not rejected: ${forged}`);
+step("API rejects another teacher's storage path");
 
 // isolation: a second teacher sees none of it
 const ctx2 = await browser.newContext({ ...devices["iPhone 13"] });

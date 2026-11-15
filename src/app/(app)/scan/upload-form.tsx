@@ -2,10 +2,40 @@
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { Alert, Button, Card, cx } from "@/components/ui";
+import { createClient } from "@/lib/supabase/client";
 
 type Kind = "roster" | "schedule";
 const MAX = 20 * 1024 * 1024;
 const ACCEPT = "image/jpeg,image/png,image/webp,image/gif,application/pdf";
+
+const EXT: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "image/gif": "gif",
+  "application/pdf": "pdf",
+};
+
+/**
+ * Shrink big phone photos before upload (saves mobile data and time). Keeps the
+ * original if it's already small, if it's a PDF, or if the browser can't decode it.
+ */
+async function shrinkImage(f: File): Promise<Blob> {
+  if (!f.type.startsWith("image/") || f.type === "image/gif" || f.size < 1.5 * 1024 * 1024) return f;
+  try {
+    const bmp = await createImageBitmap(f, { imageOrientation: "from-image" });
+    const scale = Math.min(1, 2400 / Math.max(bmp.width, bmp.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bmp.width * scale);
+    canvas.height = Math.round(bmp.height * scale);
+    canvas.getContext("2d")!.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    bmp.close();
+    const out = await new Promise<Blob | null>((r) => canvas.toBlob(r, "image/jpeg", 0.88));
+    return out && out.size < f.size ? out : f;
+  } catch {
+    return f;
+  }
+}
 
 export function UploadForm({ initialKind }: { initialKind: Kind }) {
   const router = useRouter();
@@ -31,17 +61,37 @@ export function UploadForm({ initialKind }: { initialKind: Kind }) {
     if (!file) return;
     setBusy(true);
     setError(null);
-    const body = new FormData();
-    body.set("kind", kind);
-    body.set("file", file);
     try {
-      const res = await fetch("/api/extractions", { method: "POST", body });
+      const supabase = createClient();
+      const { data } = await supabase.auth.getClaims();
+      const uid = data?.claims?.sub;
+      if (!uid) {
+        setError("انتهت الجلسة. سجّل الدخول من جديد.");
+        setBusy(false);
+        return;
+      }
+      // 1) upload straight to the teacher's private folder in Supabase Storage
+      const blob = await shrinkImage(file);
+      const type = blob.type || file.type;
+      const path = `${uid}/${crypto.randomUUID()}.${EXT[type] ?? "bin"}`;
+      const up = await supabase.storage.from("uploads").upload(path, blob, { contentType: type, upsert: false });
+      if (up.error) {
+        setError("تعذّر رفع الملف. تحقق من الاتصال وحاول مرة أخرى.");
+        setBusy(false);
+        return;
+      }
+      // 2) ask the server to analyse it
+      const res = await fetch("/api/extractions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind, path, fileName: file.name }),
+      });
       const json = await res.json().catch(() => ({}));
       if (json.jobId) {
         router.push(`/scan/${json.jobId}`);
         return;
       }
-      setError(json.error ?? "تعذّر رفع الملف");
+      setError(json.error ?? "تعذّر تحليل الملف");
     } catch {
       setError("انقطع الاتصال. تحقق من الإنترنت وحاول مرة أخرى.");
     }

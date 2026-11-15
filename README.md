@@ -97,7 +97,7 @@ then run `node e2e/email-confirm.mjs`.
 - Composite foreign keys `(id, teacher_id)` stop any cross-teacher link, even when the service role is used.
 - Teachers cannot write AI results. Extraction jobs are written server-side. Approval goes through
   `approve_*_extraction` functions, which save the reviewed data and mark the job approved in one transaction.
-- Uploads go to a private bucket under `<teacher-id>/…`. The server checks each file's real type from its magic bytes and enforces a 20 MB limit and a per-teacher hourly scan limit.
+- The browser uploads files straight to a private bucket under `<teacher-id>/…` (storage RLS), so large photos never pass through the hosting platform's request-size limit. The API then receives only the path and verifies its owner. The server checks each file's real type from its magic bytes and enforces a 20 MB limit and a per-teacher hourly scan limit.
 
 ## Backups
 
