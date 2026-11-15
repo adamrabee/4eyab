@@ -6,7 +6,7 @@ AI-powered school attendance platform for teachers (Arabic, RTL, mobile-first).
 
 ## Features
 
-- **Simple school-only accounts**: teachers register themselves with name, username, password and the **school code**, then log in with username + password. There's no email and no confirmation, and nobody without the code can register (enforced inside the database). Each teacher's data is fully isolated.
+- **Simple accounts**: teachers register themselves with name, username and password, then log in with username + password. There's no email and no confirmation. An optional `SCHOOL_CODE` restricts sign-up to people who know the code. Each teacher's data is fully isolated.
 - **Smart scan**: photograph or upload (image/PDF) a student roster or weekly timetable. Claude extracts it, the teacher reviews and corrects it, then approves.
 - Classrooms and students: add, edit, reorder, archive. Removing a student keeps their history.
 - Weekly timetable: grid and per-day editor, plus "today's periods" on the dashboard.
@@ -69,7 +69,7 @@ only the two intentional `SECURITY DEFINER` approval functions (documented in mi
 ### Accounts (no email)
 Usernames map internally to `<username>@hissati.invalid` (a reserved domain that can never receive mail).
 The server creates accounts with the admin API and marks them `app_metadata.hissati_member = true`.
-Migration 4 rejects any other sign-up at commit time, which blocks direct sign-ups using the public key.
+Migration 4 rejects any other sign-up at commit time, which blocks direct sign-ups using the public key, so every account goes through the app's username rules.
 A forgotten password can be reset in Supabase → Authentication → Users.
 
 ### Hosting environment variables (e.g. Vercel → Project → Settings → Environment Variables)
@@ -78,7 +78,7 @@ A forgotten password can be reset in Supabase → Authentication → Users.
 | `NEXT_PUBLIC_SUPABASE_URL` | `https://aljxcqxxhzxluppdeemc.supabase.co` | no |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | the project's **publishable** key (`sb_publishable_…`, Project Settings → API Keys) | no (public by design) |
 | `SUPABASE_SERVICE_ROLE_KEY` | the **secret** key (`sb_secret_…` or legacy `service_role`) | **YES, server only** |
-| `SCHOOL_CODE` | a code you choose and share with your teachers | **YES, server only** |
+| `SCHOOL_CODE` | *optional*: leave unset for open sign-up, or set a code teachers must enter | **YES, server only** |
 | `SCHOOL_NAME` | your school's name (shown on login) | no |
 | `AI_PROVIDER` | `mock` until a key is added, then `anthropic` | no |
 | `ANTHROPIC_API_KEY` | from console.anthropic.com | **YES, server only** |

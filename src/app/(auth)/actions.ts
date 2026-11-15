@@ -21,7 +21,7 @@ const signupSchema = z.object({
     .transform(normalizeUsername)
     .refine(isValidUsername, "اسم المستخدم: 3 أحرف أو أكثر، بالإنجليزية أو أرقام فقط (مثل noura أو رقم جوالك)"),
   password: z.string().min(8, "كلمة المرور 8 أحرف أو أرقام على الأقل").max(72),
-  school_code: z.string().trim().min(1, "أدخل رمز المدرسة"),
+  school_code: z.string().trim().optional().default(""),
 });
 
 /** Only allow same-site relative redirects. */
@@ -29,10 +29,15 @@ function safeNext(next?: string) {
   return next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard";
 }
 
+/** Optional: when SCHOOL_CODE is set, sign-up requires it. Unset = open sign-up. */
+function schoolCodeRequired(): boolean {
+  return Boolean(process.env.SCHOOL_CODE?.trim());
+}
+
 /** Constant-time comparison of the school code (server-only env var). */
 function schoolCodeMatches(input: string): boolean {
   const expected = process.env.SCHOOL_CODE?.trim();
-  if (!expected) return false;
+  if (!expected) return true;
   const a = createHash("sha256").update(input.trim()).digest();
   const b = createHash("sha256").update(expected).digest();
   return timingSafeEqual(a, b);
@@ -55,18 +60,17 @@ export async function signup(_: AuthState, form: FormData): Promise<AuthState> {
   const raw = Object.fromEntries(form) as Record<string, string>;
   // keep what the teacher typed (except the password) so an error doesn't wipe the form
   const fields = { full_name: raw.full_name ?? "", username: raw.username ?? "", school_code: raw.school_code ?? "" };
-  if (!process.env.SCHOOL_CODE?.trim()) return { error: "التسجيل غير مفعّل بعد على هذا الموقع.", fields };
   const parsed = signupSchema.safeParse(raw);
   if (!parsed.success) return { error: parsed.error.issues[0].message, fields };
   const { full_name, username, password, school_code } = parsed.data;
 
-  if (!schoolCodeMatches(school_code)) {
+  if (schoolCodeRequired() && !schoolCodeMatches(school_code)) {
     await new Promise((r) => setTimeout(r, 800)); // slow down guessing
     return { error: "رمز المدرسة غير صحيح", fields: { ...fields, school_code: "" } };
   }
 
   // Create the account server-side: no email is sent, and the membership marker
-  // lets it past the database guard that blocks every other kind of sign-up.
+  // lets it past the database guard that blocks sign-ups made outside the app.
   const admin = createAdminClient();
   const { error: createErr } = await admin.auth.admin.createUser({
     email: usernameToEmail(username),

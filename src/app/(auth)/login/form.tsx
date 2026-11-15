@@ -26,7 +26,7 @@ export function LoginForm({ next, school }: { next?: string; school: string }) {
       <p className="mt-4 text-center text-sm text-muted">
         أول مرة؟{" "}
         <Link href="/signup" className="font-medium text-primary">
-          أنشئ حسابك برمز المدرسة
+          أنشئ حسابك
         </Link>
       </p>
     </Card>

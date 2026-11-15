@@ -39,18 +39,23 @@ await page.goto(`${BASE}/signup`);
 await page.fill("#full_name", "أ. نورة القحطاني");
 await page.fill("#username", username);
 await page.fill("#password", "e2e-password-123");
-await page.fill("#school_code", "wrong-code");
-await shot("01-signup");
-await page.click("button[type=submit]");
-await page.getByText("رمز المدرسة غير صحيح").waitFor();
-step("wrong school code is rejected");
-await page.fill("#password", "e2e-password-123");
-await page.fill("#school_code", SCHOOL_CODE);
+const needsCode = (await page.locator("#school_code").count()) > 0;
+if (needsCode) {
+  await page.fill("#school_code", "wrong-code");
+  await shot("01-signup");
+  await page.click("button[type=submit]");
+  await page.getByText("رمز المدرسة غير صحيح").waitFor();
+  step("wrong school code is rejected");
+  await page.fill("#password", "e2e-password-123");
+  await page.fill("#school_code", SCHOOL_CODE);
+} else {
+  await shot("01-signup");
+}
 await page.click("button[type=submit]");
 await page.waitForURL("**/dashboard");
 await page.getByText("لنبدأ بإعداد فصولك").waitFor();
 await shot("02-dashboard-empty");
-step("signup with username + school code → straight in, no email");
+step(`signup with username${needsCode ? " + school code" : " (no school code)"} → straight in, no email`);
 
 // log out, then back in with username + password
 await page.goto(`${BASE}/dashboard`);
@@ -196,7 +201,7 @@ await p2.goto(`${BASE}/signup`);
 await p2.fill("#full_name", "معلم آخر");
 await p2.fill("#username", username); // already taken
 await p2.fill("#password", "e2e-password-123");
-await p2.fill("#school_code", SCHOOL_CODE);
+if (needsCode) await p2.fill("#school_code", SCHOOL_CODE);
 await p2.click("button[type=submit]");
 await p2.getByText("اسم المستخدم محجوز").waitFor();
 await p2.fill("#username", `${username}b`);
