@@ -1,6 +1,8 @@
 import type { AllowedMime } from "./files";
 import type { ExtractionKind, ExtractionResult } from "./schemas";
 
+export type ProviderName = "anthropic" | "gemini" | "mock";
+
 export interface ExtractionInput {
   kind: ExtractionKind;
   data: Buffer;
@@ -9,12 +11,12 @@ export interface ExtractionInput {
 
 export interface ExtractionOutput {
   result: ExtractionResult;
-  provider: "anthropic" | "mock";
+  provider: ProviderName;
   model: string;
 }
 
 export interface ExtractionProvider {
-  readonly name: "anthropic" | "mock";
+  readonly name: ProviderName;
   extract(input: ExtractionInput): Promise<ExtractionOutput>;
 }
 

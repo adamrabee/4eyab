@@ -6,7 +6,13 @@ import fs from "node:fs";
 if (fs.existsSync(".env.local")) process.loadEnvFile(".env.local");
 
 export default defineConfig({
-  resolve: { alias: { "@": path.resolve(import.meta.dirname, "src") } },
+  resolve: {
+    alias: {
+      "@": path.resolve(import.meta.dirname, "src"),
+      // "server-only" throws outside a React Server environment; it's a no-op for tests
+      "server-only": path.resolve(import.meta.dirname, "tests/server-only-stub.ts"),
+    },
+  },
   test: {
     include: ["tests/**/*.test.ts"],
     testTimeout: 30_000,

@@ -21,7 +21,7 @@ AI-powered school attendance platform for teachers (Arabic, RTL, mobile-first).
 
 - Next.js 16 (App Router, TypeScript) + Tailwind CSS 4
 - Supabase: PostgreSQL, Auth, Storage, with Row Level Security on every table
-- Anthropic Claude Vision for reading student rosters and timetables (images and PDFs)
+- AI vision for reading student rosters and timetables (images and PDFs): **Google Gemini** (`gemini-2.5-flash`, the default in production) or Anthropic Claude, selected with `AI_PROVIDER`
 
 ## Local development
 
@@ -80,7 +80,9 @@ A forgotten password can be reset in Supabase → Authentication → Users.
 | `SUPABASE_SERVICE_ROLE_KEY` | the **secret** key (`sb_secret_…` or legacy `service_role`) | **YES, server only** |
 | `SCHOOL_CODE` | *optional*: leave unset for open sign-up, or set a code teachers must enter | **YES, server only** |
 | `SCHOOL_NAME` | your school's name (shown on login) | no |
-| `AI_PROVIDER` | `mock` until a key is added, then `anthropic` | no |
+| `AI_PROVIDER` | `gemini` (or `anthropic`, or `mock` for labelled sample data) | no |
+| `GEMINI_API_KEY` | Google AI Studio key (when `AI_PROVIDER=gemini`) | **YES, server only** |
+| `GEMINI_MODEL` | optional, default `gemini-2.5-flash` | no |
 | `ANTHROPIC_API_KEY` | from console.anthropic.com | **YES, server only** |
 
 Never commit real values. `.env*` files are gitignored, except `.env.example`.
