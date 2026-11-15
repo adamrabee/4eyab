@@ -33,7 +33,9 @@ services:
   auth:
     image: supabase/gotrue:v2.177.0
     restart: unless-stopped
-    depends_on: { db: { condition: service_healthy } }
+    depends_on:
+      db: { condition: service_healthy }
+      mail: { condition: service_started }
     environment:
       GOTRUE_API_HOST: 0.0.0.0
       GOTRUE_API_PORT: 9999
@@ -50,10 +52,23 @@ services:
       GOTRUE_JWT_SECRET: ${JWT_SECRET}
       GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
       GOTRUE_EXTERNAL_ANONYMOUS_USERS_ENABLED: "false"
-      # Local dev only: skip email confirmation (no SMTP server here).
-      GOTRUE_MAILER_AUTOCONFIRM: "true"
+      # Local dev: emails go to Mailpit (http://localhost:54324), never the internet.
+      # Set LOCAL_AUTOCONFIRM=false (supabase/.env) to test the real confirmation flow.
+      GOTRUE_MAILER_AUTOCONFIRM: ${LOCAL_AUTOCONFIRM:-true}
+      GOTRUE_SMTP_HOST: mail
+      GOTRUE_SMTP_PORT: 1025
+      GOTRUE_SMTP_USER: ""
+      GOTRUE_SMTP_PASS: ""
+      GOTRUE_SMTP_ADMIN_EMAIL: noreply@hissati.local
+      GOTRUE_SMTP_SENDER_NAME: HISSATI
+      GOTRUE_MAILER_URLPATHS_CONFIRMATION: /auth/v1/verify
       GOTRUE_PASSWORD_MIN_LENGTH: 8
       GOTRUE_RATE_LIMIT_EMAIL_SENT: 100
+
+  mail:
+    image: axllent/mailpit:v1.27
+    restart: unless-stopped
+    ports: ["127.0.0.1:54324:8025"]
 
   rest:
     image: postgrest/postgrest:v12.2.12

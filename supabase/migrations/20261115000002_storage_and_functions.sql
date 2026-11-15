@@ -22,7 +22,7 @@ create or replace function public.normalize_ar_name(n text) returns text
 language sql immutable parallel safe as $$
   select regexp_replace(
            translate(
-             regexp_replace(coalesce(n, ''), '[ً-ْـ]', '', 'g'),
+             regexp_replace(coalesce(n, ''), '[\u064B-\u0652\u0640]', '', 'g'),
              'أإآىة', 'ااايه'),
            '\s+', ' ', 'g')
 $$;

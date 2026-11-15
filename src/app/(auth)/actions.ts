@@ -1,4 +1,5 @@
 "use server";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
@@ -17,6 +18,16 @@ const signupSchema = z.object({
   email: z.string().trim().toLowerCase().email("البريد الإلكتروني غير صحيح"),
   password: z.string().min(8, "كلمة المرور 8 أحرف على الأقل").max(72),
 });
+
+/** Public base URL of the site, used in email links. Prefer the configured value. */
+async function siteUrl() {
+  const configured = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/+$/, "");
+  if (configured) return configured;
+  const h = await headers();
+  const host = h.get("x-forwarded-host") ?? h.get("host") ?? "localhost:3000";
+  const proto = h.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
+  return `${proto}://${host}`;
+}
 
 /** Only allow same-site relative redirects. */
 function safeNext(next?: string) {
@@ -43,7 +54,10 @@ export async function signup(_: AuthState, form: FormData): Promise<AuthState> {
   const { data, error } = await supabase.auth.signUp({
     email: parsed.data.email,
     password: parsed.data.password,
-    options: { data: { full_name: parsed.data.full_name, school_name: parsed.data.school_name } },
+    options: {
+      data: { full_name: parsed.data.full_name, school_name: parsed.data.school_name },
+      emailRedirectTo: `${await siteUrl()}/auth/confirm?next=/dashboard`,
+    },
   });
   if (error) {
     const msg = /registered|exists/i.test(error.message) ? "هذا البريد مسجّل مسبقًا" : "تعذّر إنشاء الحساب، حاول مرة أخرى";

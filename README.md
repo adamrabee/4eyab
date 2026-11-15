@@ -59,11 +59,37 @@ npm run build && npm start  # then, in another shell:
 node e2e/smoke.mjs          # browser end-to-end flow (mock AI)
 ```
 
-## Production (Supabase cloud). Not done yet; needs owner approval
+## Production
 
-1. Create a Supabase project and run `supabase/migrations/*.sql` in order (SQL editor or Supabase CLI).
-2. Set the env vars from `.env.example` in the hosting platform. Keep `SUPABASE_SERVICE_ROLE_KEY` and `ANTHROPIC_API_KEY` server-only.
-3. In Supabase Auth, set the Site URL and keep email confirmation **on**.
+### Supabase project: done
+Project **`hissati`** (ref `aljxcqxxhzxluppdeemc`, region `ap-south-1` Mumbai, free plan).
+All migrations in `supabase/migrations/` are applied, and the Supabase security advisor shows
+only the two intentional `SECURITY DEFINER` approval functions (documented in migration 3).
+
+### Still to do in the Supabase dashboard (owner)
+1. **Authentication → URL Configuration**
+   - Site URL: `https://<your-domain>`
+   - Redirect URLs: `https://<your-domain>/auth/confirm`
+2. **Authentication → Providers → Email**: keep **Confirm email** ON.
+3. **Authentication → Emails → SMTP**: before inviting many teachers, connect your own SMTP
+   (the built-in sender is heavily rate-limited and meant for testing only).
+
+### Hosting environment variables (e.g. Vercel → Project → Settings → Environment Variables)
+| Name | Value | Secret? |
+|---|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | `https://aljxcqxxhzxluppdeemc.supabase.co` | no |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | the project's **publishable** key (`sb_publishable_…`, Project Settings → API Keys) | no (public by design) |
+| `SUPABASE_SERVICE_ROLE_KEY` | the **secret** key (`sb_secret_…` or legacy `service_role`) | **YES, server only** |
+| `NEXT_PUBLIC_SITE_URL` | `https://<your-domain>` | no |
+| `AI_PROVIDER` | `mock` until a key is added, then `anthropic` | no |
+| `ANTHROPIC_API_KEY` | from console.anthropic.com | **YES, server only** |
+
+Never commit real values. `.env*` files are gitignored, except `.env.example`.
+
+### Local testing of email confirmation
+The local stack includes Mailpit (http://localhost:54324). Start auth with confirmation on:
+`LOCAL_AUTOCONFIRM=false docker compose -f supabase/docker-compose.yml --env-file supabase/.env up -d auth mail`,
+then run `node e2e/email-confirm.mjs`.
 
 ## Security model
 

@@ -113,7 +113,9 @@ write_app_env() {
 }
 
 case "${1:-up}" in
-  up) ensure_docker; gen_env; mkdir -p "$SB/volumes/data" "$SB/volumes/storage"; "${COMPOSE[@]}" up -d; wait_ready; migrate; wait_rest; write_app_env ;;
+  up) ensure_docker; gen_env; mkdir -p "$SB/volumes/data" "$SB/volumes/storage"; "${COMPOSE[@]}" up -d
+      # Kong caches upstream container IPs; refresh it in case any container was recreated
+      "${COMPOSE[@]}" restart kong >/dev/null; wait_ready; migrate; wait_rest; write_app_env ;;
   down) ensure_docker; "${COMPOSE[@]}" down ;;
   reset) ensure_docker; gen_env; "${COMPOSE[@]}" down -v || true; rm -rf "$SB/volumes/data" "$SB/volumes/storage"; exec "$0" up ;;
   migrate) migrate ;;
